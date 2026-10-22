@@ -18,6 +18,12 @@ namespace TodoPlaner {
         public static int[] CursorPos() { POINT p; GetCursorPos(out p); return new int[] { p.X, p.Y }; }
         public static bool LeftDown() { return (GetAsyncKeyState(1) & 0x8000) != 0; }
         public static bool IsClickThrough(IntPtr h) { return (GetWindowLong(h, -20) & 0x20) != 0; }
+        // WS_EX_TOOLWINDOW: nicht in Alt+Tab / Taskleiste
+        public static bool IsToolWindow(IntPtr h) { return (GetWindowLong(h, -20) & 0x80) != 0; }
+        public static void SetToolWindow(IntPtr h, bool on) {
+            int s = GetWindowLong(h, -20);
+            SetWindowLong(h, -20, on ? (s | 0x80) : (s & ~0x80));
+        }
         public static void SetClickThrough(IntPtr h, bool on) {
             int s = GetWindowLong(h, -20);
             SetWindowLong(h, -20, on ? (s | 0x20) : (s & ~0x20));
@@ -121,6 +127,7 @@ foreach ($t in @($state.Items)) {
     $loadedItem = New-Todo $t.Text ([bool]$t.Important) (ConvertTo-Date $t.Due) ([bool]$t.Notified) $src (ConvertTo-Date $t.End) $kind
     $loadedItem.Stage = [int]$t.Stage
     if ($t.FullText) { $loadedItem.FullText = [string]$t.FullText }
+    if ($t.EventKey) { $loadedItem.EventKey = [string]$t.EventKey }
     [void]$todos.Add($loadedItem)
 }
 
@@ -409,6 +416,7 @@ function Save-State {
                 Kind      = $_.Kind
                 Stage     = [int]$_.Stage
                 FullText  = $_.FullText
+                EventKey  = $_.EventKey
             }
         })
         Left       = $window.Left
@@ -704,7 +712,7 @@ function Set-AiCorrection($id, [string]$orig, $result) {
 
     # 2. Lange Eintraege kurz anzeigen, Volltext bleibt im Tooltip / beim Bearbeiten
     $display = $full; $fullText = $null
-    if ($full.Length -ge $shortenFrom -and (Test-ShortOk $merged ([string]$result.short))) {
+    if ($full.Length -ge $shortenFrom -and (Test-ShortOk $full ([string]$result.short))) {
         $sp = Get-TimeInfo ([string]$result.short)
         if ($sp.Text) {
             $display = $sp.Text; $fullText = $full
@@ -900,6 +908,11 @@ function Complete-Edit([string]$text) {
     if (-not $id) { return }
     $script:editingId = $null
     $i = Find-TodoIndex $id
+    if ($i -ge 0 -and $text.Trim() -ceq (Format-EditText $todos[$i]).Trim()) {
+        # nichts geaendert (nur angeschaut) -> Kurztext bleibt
+        Show-Todos
+        return
+    }
     if ($i -ge 0) {
         $item = $todos[$i]
         if ($item.Source -eq 'calendar') {
@@ -912,7 +925,7 @@ function Complete-Edit([string]$text) {
                 if ($p.Due -ne $item.Due) { $item.Notified = $false; $item.Stage = 0 }
                 $item.Due = $p.Due
                 $item.Kind = $p.Kind
-                Start-AiCorrection $item.Id $text
+                Start-AiCorrection $item.Id $p.Text
             }
         }
     }
@@ -1207,6 +1220,19 @@ function Receive-CalendarFetch {
     if ($errors['Google']) { $status += ' Der Google-Link funktioniert nicht, bitte pr' + $ue + 'fen.' }
     $script:calStatus = $status
 
+    # Termin abgesagt, geloescht oder abgelehnt? Dann auch aus der Liste nehmen
+    if ($errors.Count -eq 0) {
+        $keys = @{}
+        foreach ($e in $script:events) { $keys[$e.Key] = 1 }
+        $removed = $false
+        foreach ($t in @($todos)) {
+            if ($t.Source -ne 'calendar' -or -not $t.Due -or $t.Id -eq $script:editingId) { continue }
+            $k = if ($t.EventKey) { $t.EventKey } else { 'ev|' + $(if ($t.FullText) { $t.FullText } else { $t.Text }) + '|' + $t.Due.ToString('s') }
+            if (-not $keys.ContainsKey($k)) { $todos.RemoveAt((Find-TodoIndex $t.Id)); $removed = $true }
+        }
+        if ($removed) { Show-Todos; Save-State }
+    }
+
     $msg = ($errors.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ' | '
     if ($msg -and $msg -ne $script:lastCalError) { Write-Log ("Kalender: " + $msg) }
     $script:lastCalError = $msg
@@ -1258,6 +1284,7 @@ function Invoke-ReminderCheck {
             if ($now -ge $ev.Start.AddMinutes(-$leadMinutes) -and $now -lt $ev.End) {
                 $script:seen[$ev.Key] = $ev.Start.ToString('s')
                 $calItem = New-Todo $ev.Title $true $ev.Start $true 'calendar' $ev.End
+                $calItem.EventKey = $ev.Key
                 $todos.Insert(0, $calItem)
                 if ($ev.Title.Length -ge $shortenFrom) { Start-AiCorrection $calItem.Id $ev.Title }
                 Show-Notification ("Termin um {0:HH:mm}" -f $ev.Start) $ev.Title
@@ -1522,6 +1549,9 @@ $hoverTimer = New-Object System.Windows.Threading.DispatcherTimer
 $hoverTimer.Interval = [TimeSpan]::FromMilliseconds(40)
 $hoverTimer.Add_Tick({
     try {
+        # offen = Werkzeugfenster (nicht in Alt+Tab), minimiert = normales Fenster (Taskleiste + Alt+Tab)
+        $tool = $window.WindowState -ne 'Minimized'
+        if ($tool -ne [TodoPlaner.Native]::IsToolWindow($script:hwnd)) { [TodoPlaner.Native]::SetToolWindow($script:hwnd, $tool) }
         if ([TodoPlaner.Native]::LeftDown()) { return }   # waehrend Ziehen/Resize nicht umschalten
         $c  = [TodoPlaner.Native]::CursorPos()
         $pt = $window.PointFromScreen((New-Object System.Windows.Point($c[0], $c[1])))
@@ -1569,7 +1599,10 @@ $closeBtn.Add_Click({ Minimize-Planer })
 
 # Offen: nicht in Taskleiste/Alt+Tab (schwebt eh im Vordergrund). Minimiert: in Taskleiste/Alt+Tab.
 $window.Add_StateChanged({
-    if ($window.WindowState -ne 'Minimized' -and $window.ShowInTaskbar) { $window.ShowInTaskbar = $false }
+    if ($window.WindowState -ne 'Minimized') {
+        if ($window.ShowInTaskbar) { $window.ShowInTaskbar = $false }
+        [TodoPlaner.Native]::SetToolWindow($script:hwnd, $true)
+    }
 })
 
 $scroll.Add_Drop({
@@ -1637,6 +1670,7 @@ $window.Dispatcher.Add_UnhandledException({
 function Test-Shown { $window.IsVisible -and $window.WindowState -ne 'Minimized' }
 
 function Minimize-Planer {
+    [TodoPlaner.Native]::SetToolWindow($script:hwnd, $false)   # Werkzeugfenster koennen nicht in die Taskleiste
     $window.ShowInTaskbar = $true   # erst in die Taskleiste, sonst minimiert WPF in eine Mini-Titelleiste
     $window.WindowState = 'Minimized'
 }
