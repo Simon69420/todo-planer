@@ -63,6 +63,7 @@ Aufgaben einfach reinschreiben, mit einem Klick abhaken – fertig.
 | Rückgängig | `Strg+Z` oder ↶ in der Titelzeile |
 | Minimieren / zurückholen | — in der Titelzeile, `Strg+Alt+T`, Taskleiste oder Tray-Symbol |
 | Beenden | Rechtsklick aufs Tray-Symbol → Beenden |
+| Wieder starten | `start.bat` doppelklicken (startet sonst automatisch mit Windows) |
 | Aufgaben importieren | `import.txt` in den Ordner legen, eine Aufgabe pro Zeile – wird automatisch übernommen und gelöscht |
 
 ## Datenschutz
@@ -85,4 +86,5 @@ Aufgaben einfach reinschreiben, mit einem Klick abhaken – fertig.
 ## Hinweise
 
 - Der Autostart ruft PowerShell mit `-ExecutionPolicy Bypass` auf, damit die (unsignierten) Skripte ohne Systemänderung laufen. Die Richtlinie gilt nur für diesen einen Prozess.
-- Fehler landen in `error.log` im Programmordner.
+- Start, Fehler und unerwartetes Beenden werden in `error.log` im Programmordner protokolliert.
+  Steht dort beim Verschwinden des Fensters nichts, wurde der Prozess von außen beendet.

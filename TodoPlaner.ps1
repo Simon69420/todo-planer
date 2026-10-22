@@ -70,6 +70,10 @@ function Write-Log($msg) {
     try { Add-Content -Path $logFile -Value ("{0:yyyy-MM-dd HH:mm:ss}  {1}" -f (Get-Date), $msg) -Encoding UTF8 } catch {}
 }
 
+Write-Log "Gestartet (PID $PID)"
+# Abstuerze ausserhalb der Oberflaeche (z.B. Hintergrund-Threads) wenigstens protokollieren
+[AppDomain]::CurrentDomain.add_UnhandledException({ Write-Log ("Absturz (unbehandelt): " + $_.ExceptionObject) })
+
 # ---------- Icon: gruenes abgerundetes Quadrat mit weissem Haken ----------
 function New-TodoBitmap([int]$s) {
     $bmp = New-Object System.Drawing.Bitmap $s, $s
@@ -1755,5 +1759,6 @@ $window.Add_Closed({
 
 try { [void]$app.Run($window) }
 catch { Write-Log ("Absturz: " + $_.Exception.ToString()) }
+if (-not $script:quitting) { Write-Log 'Unerwartet beendet (Fensterschleife zu Ende)' }
 $tray.Dispose()
 $mutex.ReleaseMutex()
