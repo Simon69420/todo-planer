@@ -1,0 +1,13 @@
+# Persoenliche Daten - niemals ins Repo
+todos.json
+todos.*.json
+settings.json
+import.txt
+error.log
+*.log
+
+# Sonstiges
+*.bak
+Thumbs.db
+desktop.ini
+.claude/
